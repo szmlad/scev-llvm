@@ -1,0 +1,467 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+
+	<title>SCEV u LLVM</title>
+
+	<style>
+		.small-math {
+			font-size: 20px;
+		}
+	</style>
+
+	<link rel="stylesheet" href="dist/reset.css">
+	<link rel="stylesheet" href="dist/reveal.css">
+	<link rel="stylesheet" href="dist/theme/simple.css">
+	<link rel="stylesheet" href="plugin/highlight/default-light.css">
+</head>
+
+<body>
+	<div class="reveal">
+		<div class="slides">
+			<section>
+				<h1>Uvod u skalarnu evoluciju</h1>
+			</section>
+			<section>
+				<h3>Sabiramo prvih n prirodnih brojeva</h3>
+				<pre>
+					<code data-trim data-noescape data-line-numbers>
+						int sum1(int n) {
+							int result = 0;
+							for (int i = 0; i &lt;= n; ++i) {
+								result += i;
+							}
+							return result;
+						}
+					</code>
+					</pre>
+				<pre>
+					<code data-trim data-noescape data-line-numbers>
+						int sum2(int n) {
+							return n * (n + 1) / 2;
+						}
+					</code>
+					</pre>
+			</section>
+			<section>
+				<iframe width="800px" height="400px"
+					src="https://godbolt.org/e#g:!((g:!((g:!((h:codeEditor,i:(filename:'1',fontScale:14,fontUsePx:'0',j:1,lang:c%2B%2B,selection:(endColumn:2,endLineNumber:7,positionColumn:2,positionLineNumber:7,selectionStartColumn:2,selectionStartLineNumber:7,startColumn:2,startLineNumber:7),source:'int+sum(int+n)+%7B%0A++++int+result+%3D+0%3B%0A++++for+(int+i+%3D+1%3B+i+%3C%3D+n%3B+%2B%2Bi)+%7B%0A++++++++result+%2B%3D+i%3B%0A++++%7D%0A++++return+result%3B%0A%7D%0A'),l:'5',n:'0',o:'C%2B%2B+source+%231',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0'),(g:!((h:compiler,i:(compiler:clang1600,deviceViewOpen:'1',filters:(b:'0',binary:'1',binaryObject:'1',commentOnly:'0',debugCalls:'1',demangle:'0',directives:'0',execute:'0',intel:'0',libraryCode:'0',trim:'1'),flagsViewOpen:'1',fontScale:14,fontUsePx:'0',j:1,lang:c%2B%2B,libs:!(),options:'-O0',overrides:!(),selection:(endColumn:1,endLineNumber:1,positionColumn:1,positionLineNumber:1,selectionStartColumn:1,selectionStartLineNumber:1,startColumn:1,startLineNumber:1),source:1),l:'5',n:'0',o:'+x86-64+clang+16.0.0+(Editor+%231)',t:'0')),k:50,l:'4',n:'0',o:'',s:0,t:'0')),l:'2',n:'0',o:'',t:'0')),version:4"></iframe>
+				<p class="fragment fade-in">
+					\[
+					1 + 2 + \dots + n = \frac{n(n + 1)}{2} = \\
+					\]
+				</p>
+				<p class="fragment fade-in">
+					\[
+					= \frac{(n - 2)(n - 1)}{2} + (n - 1) + n
+					\]
+				</p>
+			</section>
+			<section>
+				<h2>Sadržaj</h2>
+				<ul>
+					<li>Šta je skalarna evolucija?</li>
+					<li>Matematički formalizam i lanci rekurzija</li>
+					<li>SCEV u LLVM-u</li>
+					<li>Dodatna literatura</li>
+				</ul>
+			</section>
+			<section>
+				<h2>Skalarna evolucija (SCEV)</h2>
+				<p class="fragment fade-in">Promena (<em>evolucija</em>) skalara tokom iteracija petlje</p>
+				<p class="fragment fade-in">Zasnovna je na simboličkoj analizi</p>
+				<p class="fragment fade-in">Pomaže u različitim optimizacijama (vektorizacija petlji i
+					<em>load</em><em>/store</em> operacija, <em>loop strength reduction</em>)
+				</p>
+			</section>
+			<section>
+				<h2>Jednostavan primer</h2>
+				<pre>
+						<code data-trim data-noescape data-line-numbers>
+							void fill(std::vector&lt;int&gt; &amp;v, int n) {
+								size_t s = v.size();
+								for (size_t i = 0; i &lt; s; ++i) {
+									v[i] = i*n;
+								}
+							}
+						</code>
+					</pre>
+				<p class="fragment fade-in">Kako se v[i] menja u odnosu na iteraciju?</p>
+				<span class="fragment fade-in">
+					<table>
+						<tr>
+							<th>$i$</th>
+							<td>0</td>
+							<td>1</td>
+							<td>2</td>
+							<td>...</td>
+							<td>s</td>
+						</tr>
+						<tr>
+							<th>$v[i]$</th>
+							<td>0</td>
+							<td>n</td>
+							<td>2n</td>
+							<td>...</td>
+							<td>sn</td>
+						</tr>
+					</table>
+				</span>
+			</section>
+			<section>
+				<table>
+					<tr>
+						<th>i</th>
+						<td>0</td>
+						<td>1</td>
+						<td>2</td>
+						<td>...</td>
+						<td>s</td>
+					</tr>
+					<tr>
+						<th>v[i]</th>
+						<td>0</td>
+						<td>n</td>
+						<td>2n</td>
+						<td>...</td>
+						<td>sn</td>
+					</tr>
+				</table>
+				<p class="fragment fade-in">
+					\[
+					v[0] = 0 \\
+					v[i] = v[i - 1] + n
+					\]
+				</p>
+			</section>
+			<section>
+				Na osnovu ove rekurzije možemo da zamenimo množenje sabiranjem
+				<p class="fragment fade-in">
+				<pre>
+					<code data-trim data-noescape data-line-numbers>
+					void fill(std::vector&lt;int&gt; &amp;v, int n) {
+						size_t s = v.size();
+						int v_rec = 0;
+						for (size_t i = 0; i &lt; s; ++i) {
+							v_rec += n;
+							v[i] = v_rec;
+						}
+					}
+				</code>
+			</pre>
+				</p>
+			</section>
+			<section>
+				<h2>Formalnija notacija</h2>
+				<p>
+					<em>Lanac rekurzija</em> pišemo kao
+					\[
+					\{a, \star, b\}
+					\]
+				<p class="fragment fade-in">
+					$a$ - inicijalna vrednost
+				</p>
+				<p class="fragment fade-in">
+					$\star$ - operator koji se primenjuje u svakom koraku
+				</p>
+				<p class="fragment fade-in">
+					$b$ - vrednost kojom se rekurzija ažurira
+				</p>
+				</p>
+			</section>
+			<section>
+				<h2>Primer</h2>
+				<p>
+					\[
+					R = \{2, +, 4\}
+					\]
+				</p>
+				<p class="fragment fade-in">
+					2 je početna vrednost
+				</p>
+				<p class="fragment fade-in">
+					Svaki korak <strong>dodaje</strong> (+) 4
+				</p>
+				<span class="fragment fade-in">
+					<table>
+						<tr>
+							<th>$i$</th>
+							<td>0</td>
+							<td>1</td>
+							<td>2</td>
+							<td>3</td>
+							<td>4</td>
+							<td>...</td>
+						</tr>
+						<tr>
+							<th>$R$</th>
+							<td>2</td>
+							<td>6</td>
+							<td>10</td>
+							<td>14</td>
+							<td>18</td>
+							<td>...</td>
+						</tr>
+					</table>
+				</span>
+			</section>
+			<section>
+				<h2>Lanac rekurzija</h2>
+				Vrednost koraka ($b$) ne mora da bude statička vrednost, već i sama može biti rekurzija
+				<p class="fragment fade-in">
+					Otuda naziv lanac rekurzija (<em>chain of recurrences</em>)
+				</p>
+			</section>
+			<section>
+				<h2>Komplikovaniji primer</h2>
+				\[
+				R_1 = \{2, +, \{4, +, 6\}\} \\
+				R_2 = \{4, +, 6\}
+				\]
+				<p class="fragment fade-in">
+					\[
+					R = \{2, +, 4, +, 6\}
+					\]
+				</p>
+				<span class="fragment fade-in">
+					<table>
+						<tr>
+							<th>$i$</th>
+							<td>0</td>
+							<td>1</td>
+							<td>2</td>
+							<td>3</td>
+							<td>4</td>
+							<td>...</td>
+						</tr>
+						<tr>
+							<th>$R_2$</th>
+							<td>4</td>
+							<td>10</td>
+							<td>16</td>
+							<td>22</td>
+							<td>28</td>
+							<td>...</td>
+						</tr>
+						<tr>
+							<th>$R_1$</th>
+							<td>2</td>
+							<td>6</td>
+							<td>16</td>
+							<td>32</td>
+							<td>54</td>
+							<td>...</td>
+						</tr>
+					</table>
+				</span>
+			</section>
+			<section>
+				<h2>Od izraza do lanca rekurzija</h2>
+				<p>
+					\[
+					p(x) = x^2 + 3x + 2
+					\]
+				</p>
+				<span class="fragment fade-in">
+					<table>
+						<tr>
+							<th>$i$</th>
+							<td>0</td>
+							<td>1</td>
+							<td>2</td>
+							<td>3</td>
+							<td>4</td>
+							<td>...</td>
+						</tr>
+						<tr>
+							<th>$p(i)$</th>
+							<td><strong>2</strong></td>
+							<td>6</td>
+							<td>12</td>
+							<td>20</td>
+							<td>30</td>
+							<td>...</td>
+						</tr>
+						<tr>
+							<th>$D$</th>
+							<td>-</td>
+							<td><strong>4</strong></td>
+							<td>6</td>
+							<td>8</td>
+							<td>10</td>
+							<td>...</td>
+						</tr>
+						<tr>
+							<th>$D^2$</th>
+							<td>-</td>
+							<td>-</td>
+							<td><strong>2</strong></td>
+							<td>2</td>
+							<td>2</td>
+							<td>...</td>
+						</tr>
+					</table>
+				</span>
+				<p class="fragment fade-in">
+					\[
+					R = \{2, +, 4, +, 2\}
+					\]
+				</p>
+			</section>
+			<section>
+				<h2>Pravila za kombinovanje lanaca rekurzija</h2>
+				<p>
+					\[
+					R_1 = \{a, +, b\}, R_2 = \{c, +, d\}, m \in \mathbb{R}
+					\]
+				</p>
+				<p class="fragment fade-in">
+					\[
+					m + R_1 = \{m + a, +, b\} \\
+					m R_1 = \{ma, +, mb\} \\
+					R_1 + R_2 = \{a + c, +, b + d\} \\
+					R_1 * R_2 = \{ac, +, ad + bc + bd, +, 2bd\}
+					\]
+				</p>
+			</section>
+			<section>
+				<h2>Komplikovaniji primer, na drugi način</h2>
+				<p>
+					\[
+					p(x) = x^2 + 3x + 2
+					\]
+				</p>
+				<p class="fragment fade-in small-math">
+					\[
+					\{0, +, 1\}^2 + 3\{0, +, 1\} + 2 =
+					\]
+				</p>
+				<p class="fragment fade-in small-math">
+					\[
+					\{0, +, 1, +, 2\} + \{0, +, 3\} + 2 = \\
+					\]
+				</p>
+				<p class="fragment fade-in small-math">
+					\[
+					\{0, +, 1, +, 2\} + \{2, +, 3\} = \\
+					\]
+				</p>
+				<p class="fragment fade-in small-math">
+					\[
+					\{2, +, \{1, +, 2\} + 3\} = \\
+					\]
+				</p>
+				<p class="fragment fade-in small-math">
+					\[
+					\{2, +, \{4, +, 2\}\} = \\
+					\]
+				</p>
+				<p class="fragment fade-in small-math">
+					\[
+					\{2, +, 4, +, 2\}
+					\]
+				</p>
+			</section>
+			<section>
+				<h2>SCEV u LLVM-u</h2>
+				<p>
+					SCEV analizira skalare u kodu i dodeljuje im lance rekurzija
+				</p>
+				<p class="fragment fade-in">
+					SCEVConstant, SCEVAddExpr, SCEVMulExpr, SCEVDivExpr, SCEVAddRecExpr
+				</p>
+				<p class="fragment fade-in">
+					Sama skalarna evolucija "ne radi ništa," ali njeni rezultati koriste se u mnogim prolazima
+				</p>
+			</section>
+			<section>
+				<h2>Dependence Analysis</h2>
+				<p>
+					Zanima nas da li postoje zavisnosti u čitanju i pisanju, korisno ako želimo da menjamo redosled
+					instrukcija.
+				</p>
+				<p class="fragment fade-in">
+					Ako imamo $v[m + s*i]$ i $v[n + s*i]$, možemo da posmatramo $SCEV(m)$ i $SCEV(n)$
+				</p>
+				<p class="fragment fade-in">
+					Posmatranjem $SCEV(m) - SCEV(n)$ možemo da utvrdimo da li postoje zavisnosti u pristupima.
+				</p>
+			</section>
+			<section>
+				<h2>Primer</h2>
+				<pre>
+					<code data-trim data-noescape data-line-numbers>
+						for (int i = 0; i &lt; n; ++i) {
+							v[2*i + 1] = v[2*i];
+						}
+					</code>
+				</pre>
+				<p class="fragment fade-in">
+					$s = 2, m = 1, n = 0$
+				</p>
+				<p class="fragment fade-in">
+					$m - n = 1$
+				</p>
+				<p class="fragment fade-in">
+					$gcd(s, m - n) = 1$
+				</p>
+				<p class="fragment fade-in">
+					Pošto je najveći zajednički delilac 1, nikad ne pristupamo istim elementima.
+				</p>
+			</section>
+			<section>
+				<h2>Zaključak</h2>
+				<p>
+				<ul>
+					<li>Skalarna evolucija je analiza promene skalara kroz iteracije petlje</li>
+					<li>Bazirana je na algebrom nad rekurzijama i lancima rekurzija</li>
+					<li>LLVM koristi SCEV u nekim bitnim optimizacionim i analitičkim prolazima (vektorizacija,
+						redukcija snage itd.)</li>
+					<li>SCEV u LLVM-u je oblast na kojoj se aktivno radi (SCEVMulRecExpr?)</li>
+				</ul>
+				</p>
+			</section>
+			<section>
+				<h2>Literatura i reference</h2>
+				<ul>
+					<li>
+						<a href="https://www.youtube.com/watch?v=AmjliNp0_00">2018 EuroLLVM Developers’ Meeting: J.
+							Absar “Scalar Evolution - Demystified”</a>
+					</li>
+					<li>
+						<a href="https://baziotis.cs.illinois.edu/compilers/introduction-to-scalar-evolution.html">Introduction
+							to Scalar Evolution with Iteration-based Intuition</a>
+					</li>
+				</ul>
+			</section>
+		</div>
+	</div>
+
+	<script src="dist/reveal.js"></script>
+	<script src="plugin/notes/notes.js"></script>
+	<script src="plugin/markdown/markdown.js"></script>
+	<script src="plugin/highlight/highlight.js"></script>
+	<script src="plugin/math/math.js"></script>
+	<script>
+		// More info about initialization & config:
+		// - https://revealjs.com/initialization/
+		// - https://revealjs.com/config/
+		Reveal.initialize({
+			hash: true,
+			slideNumber: true,
+
+			// Learn about plugins: https://revealjs.com/plugins/
+			plugins: [
+				RevealMarkdown,
+				RevealHighlight,
+				RevealNotes,
+				RevealMath.KaTeX,
+			]
+		});
+	</script>
+</body>
+
+</html>
